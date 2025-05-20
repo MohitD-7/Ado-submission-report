@@ -245,7 +245,7 @@ def process_uploaded_files_task_worker(uploaded_files: list, results_container: 
         })
 
 # --- Streamlit UI ---
-st.set_page_config(page_title="Excel Analyzer", layout="wide", initial_sidebar_state="collapsed")
+st.set_page_config(page_title="Ado Report", layout="wide", initial_sidebar_state="collapsed")
 
 # Initialize session state if not already done
 default_ss = {
@@ -297,7 +297,7 @@ with st.container():
         st.caption(f"{len(st.session_state.uploaded_file_names_display)} file(s) staged. Ready to process.")
 
     process_button_disabled = st.session_state.is_processing or not st.session_state.current_uploaded_files_cache
-    if st.button("🚀 Analyze Selected Files", type="primary", disabled=process_button_disabled, use_container_width=True):
+    if st.button("🚀 Make Report", type="primary", disabled=process_button_disabled, use_container_width=True):
         if st.session_state.current_uploaded_files_cache:
             st.session_state.is_processing = True
             st.session_state.initiated_once = True
@@ -423,6 +423,6 @@ if st.session_state.initiated_once and not st.session_state.is_processing and st
         st.info("No data was generated to include in a downloadable report.")
 
 elif not st.session_state.initiated_once: 
-    st.info("☝️ Upload files and click 'Analyze Selected Files' to begin.")
+    st.info("☝️ Upload files and click 'Make Report' to begin.")
 
 st.markdown("---"); st.caption(f"Excel Analyzer v1.5 (Full Code)")
