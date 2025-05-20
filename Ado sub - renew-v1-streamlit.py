@@ -18,7 +18,7 @@ except ImportError:
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - [%(threadName)s] - %(message)s')
 logger = logging.getLogger(__name__)
 
-# --- Helper Functions ---
+# --- Helper Functions (No st.* calls from here) ---
 def extract_file_info_from_name(filename_str: str, log_fn_for_worker):
     de_code, submission_date, sku_count, sku_type = None, None, 0, 'Regular'
     try:
@@ -87,15 +87,15 @@ def count_terms_in_comments(comments_text: str, terms_to_search: list[str]):
                 counts[term] += 1; break
     return counts
 
-# --- Worker Thread Function ---
+# --- Worker Thread Function (This is the one that produced your good console logs) ---
 def process_uploaded_files_task_worker(uploaded_files: list, results_container: dict):
     worker_logs, worker_status_data, detailed_list, summary_list, skipped_list = [], [], [], [], []
-    final_msg = "Processing initiated..."
+    final_msg = "Processing initiated..." # Default final message
 
     def _log(message, level="info"):
         timestamp = time.strftime("%Y-%m-%d %H:%M:%S")
         worker_logs.append(f"{timestamp} - {level.upper()} - {message}")
-        getattr(logger, level, logger.info)(message)
+        getattr(logger, level, logger.info)(message) # Log to console/file as well
 
     try:
         _log(f"Processing {len(uploaded_files)} uploaded files.")
@@ -136,7 +136,7 @@ def process_uploaded_files_task_worker(uploaded_files: list, results_container: 
             
             if not had_error:
                 try: # Inner try for individual file processing
-                    up_file.seek(0)
+                    up_file.seek(0) # Ensure buffer is at the start
                     xl_file = pd.ExcelFile(up_file, engine='openpyxl')
                     de_sheets = [s_name for s_name in xl_file.sheet_names if s_name.upper().startswith('DE-')]
                     if not de_sheets:
@@ -199,8 +199,8 @@ def process_uploaded_files_task_worker(uploaded_files: list, results_container: 
                 except Exception as e_file:
                     reason = f"Error during processing of {fname}: {str(e_file)}"
                     _log(reason, "error"); logger.exception(f"Error details for {fname}:")
-                    if not had_error: skipped_list.append((fname, reason)) # Avoid double add if already skipped
-                    if current_file_status_idx != -1: worker_status_data[current_file_status_idx].update({"Status": "Error", "Reason": str(e_file)[:100]})
+                    if not had_error: skipped_list.append((fname, reason))
+                    if current_file_status_idx != -1: worker_status_data[current_file_status_idx].update({"Status": "Error", "Reason": str(e_file)[:100]}) # Truncate long error messages
         
         _log("-" * 50); _log("Processing Summary:")
         _log(f"Total files considered: {len(uploaded_files)}")
@@ -223,17 +223,22 @@ def process_uploaded_files_task_worker(uploaded_files: list, results_container: 
             for col in cols_s: totals_s[col] = pd.to_numeric(summary_df[col], errors='coerce').sum()
             summary_df = pd.concat([summary_df, pd.DataFrame([totals_s])], ignore_index=True)
 
-        final_msg = "Processing complete. See results below." if (processed_c > 0 or skipped_list or detailed_list or summary_list) else "No files were processed or generated data."
+        if processed_c > 0 or detailed_list or summary_list or skipped_list:
+            final_msg = "Processing complete. See results below."
+        else:
+            final_msg = "No files were processed or generated data from the uploads."
+            
         results_container.update({
             "log_messages": worker_logs, "file_status_data": worker_status_data,
             "detailed_df": detailed_df, "summary_df": summary_df, "skipped_df": skipped_df,
             "final_status_message": final_msg, "error_occurred": False
         })
+
     except Exception as e_critical:
         _log(f"CRITICAL TASK ERROR: {str(e_critical)}", "critical")
         logger.exception("Critical error in worker thread:")
         results_container.update({
-            "log_messages": worker_logs, "file_status_data": worker_status_data,
+            "log_messages": worker_logs, "file_status_data": worker_status_data, # Return any partial data
             "detailed_df": pd.DataFrame(detailed_list), "summary_df": pd.DataFrame(summary_list),
             "skipped_df": pd.DataFrame(skipped_list, columns=['Filename', 'Reason']),
             "final_status_message": f"Critical Task Error: {str(e_critical)}", "error_occurred": True
@@ -242,16 +247,21 @@ def process_uploaded_files_task_worker(uploaded_files: list, results_container: 
 # --- Streamlit UI ---
 st.set_page_config(page_title="Excel Analyzer", layout="wide", initial_sidebar_state="collapsed")
 
+# Initialize session state if not already done
 default_ss = {
     "is_processing": False, "initiated_once": False, "logs": [], "status_data": [],
     "df_detailed": pd.DataFrame(), "df_summary": pd.DataFrame(), "df_skipped": pd.DataFrame(),
     "final_message": "", "worker_thread": None, "thread_results": {},
     "current_uploaded_files_cache": None, "uploaded_file_names_display": [],
-    "thread_results_consumed": True, # NEW: Initially true, set to false when processing starts
-    "last_uploaded_files_id": None # To track identity of uploaded file list
+    "thread_results_consumed": True, "last_uploaded_files_id": None
 }
 for k, v in default_ss.items():
     if k not in st.session_state: st.session_state[k] = v
+
+# Function to append messages to UI log (main thread only)
+def ui_log(message):
+    timestamp = time.strftime("%Y-%m-%d %H:%M:%S")
+    st.session_state.logs.append(f"[{timestamp}] UI - {message}")
 
 st.markdown("<h1 style='text-align: center; color: #007bff;'>📁 Advanced Excel File Analyzer 📁</h1>", unsafe_allow_html=True)
 st.markdown("---")
@@ -267,7 +277,7 @@ with st.container():
         "Drag and drop files here or click to browse",
         type=["xlsx", "xlsm"],
         accept_multiple_files=True,
-        key="file_uploader_widget_stable_v2", # Consistent key
+        key="file_uploader_final_key_v2", # Consistent key
         disabled=st.session_state.is_processing,
         label_visibility="collapsed"
     )
@@ -278,11 +288,10 @@ with st.container():
             st.session_state.uploaded_file_names_display = [f.name for f in uploaded_files_ui] if uploaded_files_ui else []
             st.session_state.last_uploaded_files_id = id(uploaded_files_ui)
     elif not st.session_state.is_processing: 
-        if st.session_state.last_uploaded_files_id is not None : # If uploader was cleared by user after having files
+        if st.session_state.last_uploaded_files_id is not None :
             st.session_state.current_uploaded_files_cache = None
             st.session_state.uploaded_file_names_display = []
             st.session_state.last_uploaded_files_id = None
-
 
     if st.session_state.uploaded_file_names_display and not st.session_state.is_processing:
         st.caption(f"{len(st.session_state.uploaded_file_names_display)} file(s) staged. Ready to process.")
@@ -293,9 +302,10 @@ with st.container():
             st.session_state.is_processing = True
             st.session_state.initiated_once = True
             st.session_state.thread_results_consumed = False 
-            st.session_state.logs = [f"[{time.strftime('%H:%M:%S')}] Processing {len(st.session_state.current_uploaded_files_cache)} files..."]
+            st.session_state.logs = [f"[{time.strftime('%H:%M:%S')}] UI - Processing {len(st.session_state.current_uploaded_files_cache)} files initiated..."]
             st.session_state.status_data, st.session_state.df_detailed, st.session_state.df_summary, st.session_state.df_skipped = [], pd.DataFrame(), pd.DataFrame(), pd.DataFrame()
-            st.session_state.final_message, st.session_state.thread_results = "", {}
+            st.session_state.final_message = "" 
+            st.session_state.thread_results = {} 
 
             files_to_process = st.session_state.current_uploaded_files_cache
             
@@ -305,91 +315,100 @@ with st.container():
                 name="FileProcessingThread"
             )
             st.session_state.worker_thread.start()
-            st.rerun()
+            ui_log("Worker thread started.")
+            st.rerun() 
         else:
             st.warning("No files selected. Please upload files to analyze.")
 
 if st.session_state.is_processing:
-    thread_alive = st.session_state.worker_thread and st.session_state.worker_thread.is_alive()
-    if thread_alive:
-        with st.spinner("⚙️ Analyzing files... Please hold on. This may take a few moments."):
-            st.session_state.worker_thread.join(timeout=0.5) 
-        if st.session_state.worker_thread.is_alive():
-            st.rerun() 
-        else: # Thread finished
-            st.session_state.is_processing = False
-            st.rerun() # CRITICAL: Rerun to trigger the result processing block below
-    # This else block runs when is_processing was true, but thread is now found to be not alive.
-    # OR when is_processing became false in the block above and we reran.
-    else: 
-        results = st.session_state.thread_results
-        if results and "final_status_message" in results and not st.session_state.thread_results_consumed:
-            st.session_state.logs.extend(results.get("log_messages", []))
-            st.session_state.status_data = results.get("file_status_data", [])
-            st.session_state.df_detailed = results.get("detailed_df", pd.DataFrame())
-            st.session_state.df_summary = results.get("summary_df", pd.DataFrame())
-            st.session_state.df_skipped = results.get("skipped_df", pd.DataFrame())
-            st.session_state.final_message = results.get("final_status_message", "Processing finished.")
-            
-            if results.get("error_occurred", False):
-                st.error(st.session_state.final_message)
-            else:
-                st.success(st.session_state.final_message)
-            
-            st.session_state.thread_results_consumed = True
-            st.session_state.current_uploaded_files_cache = None 
-            st.session_state.uploaded_file_names_display = []
-            st.session_state.last_uploaded_files_id = None # Reset uploader tracking
+    ui_log("UI in 'is_processing' state, checking thread.")
+    if st.session_state.worker_thread and st.session_state.worker_thread.is_alive():
+        with st.spinner("⚙️ Analyzing files... This may take a moment. Logs will update upon completion."):
+            time.sleep(1) # Keep UI responsive, thread runs in background
+        ui_log("Thread still alive, rerunning for spinner.")
+        st.rerun() # Continue showing spinner
+    else: # Thread has finished or was never properly alive
+        ui_log("Thread reported as not alive. Setting is_processing=False and rerunning to process results.")
+        st.session_state.is_processing = False
+        st.rerun() # This rerun is crucial to enter the next block
 
-            # Important: We need to ensure the UI updates with the new data.
-            # A direct rerun here might be okay, or Streamlit might handle it.
-            # Let's try without an explicit rerun here first, as the state change should trigger it.
-            # If not, add st.rerun() back here.
-
-        elif st.session_state.initiated_once and not st.session_state.thread_results_consumed and not (results and "final_status_message" in results):
-            st.warning("Processing seems to have finished, but results are missing or incomplete. Check console logs for thread errors.")
-            st.session_state.thread_results_consumed = True # Prevent re-warning
+elif st.session_state.initiated_once and not st.session_state.is_processing and not st.session_state.thread_results_consumed:
+    # This block runs AFTER is_processing is set to False and we've rerun
+    ui_log("Processing results block entered.")
+    results = st.session_state.thread_results
+    
+    if results and "final_status_message" in results:
+        ui_log(f"Consuming thread results. Keys: {list(results.keys())}")
+        
+        worker_logs = results.get("log_messages", [])
+        if worker_logs: st.session_state.logs.extend(worker_logs)
+        
+        st.session_state.status_data = results.get("file_status_data", [])
+        st.session_state.df_detailed = results.get("detailed_df", pd.DataFrame())
+        st.session_state.df_summary = results.get("summary_df", pd.DataFrame())
+        st.session_state.df_skipped = results.get("skipped_df", pd.DataFrame())
+        st.session_state.final_message = results.get("final_status_message", "Processing finished.")
+        
+        if results.get("error_occurred", False):
+            st.error(st.session_state.final_message)
+        else:
+            st.success(st.session_state.final_message)
+        
+        st.session_state.thread_results_consumed = True
+        st.session_state.current_uploaded_files_cache = None 
+        st.session_state.uploaded_file_names_display = []
+        st.session_state.last_uploaded_files_id = None
+        ui_log("Thread results consumed and UI states updated. Rerunning for display.")
+        st.rerun() # Rerun to display the populated tables and download button
+    else:
+        ui_log("Results expected but not found or already consumed. Initiated_once is True.")
+        if not st.session_state.final_message: # Avoid overwriting existing error/success
+            st.warning("Processing finished, but no valid results were found to display. Check console for worker thread errors.")
+        st.session_state.thread_results_consumed = True # Mark as consumed to prevent loop
 
 # --- Display Sections ---
-if st.session_state.initiated_once and not st.session_state.is_processing:
+if st.session_state.initiated_once and not st.session_state.is_processing and st.session_state.thread_results_consumed:
+    ui_log("Displaying result sections as processing is done and results (should be) consumed.")
+    # ... (The rest of the display logic for expanders, tables, download button - SAME AS PREVIOUS GOOD VERSION) ...
     st.markdown("---")
     st.subheader("2. Processing Overview")
     col_status, col_logs = st.columns(2)
     with col_status, st.expander("📊 File by File Status", expanded=True):
-        if st.session_state.status_data: # Check if list is not empty
+        if st.session_state.status_data: 
             df_status_display = pd.DataFrame(st.session_state.status_data)
-            if not df_status_display.empty: # Check if DataFrame is not empty
+            if not df_status_display.empty: 
                 def style_status(row):
                     colors = {'Processed': 'green', 'Skipped': 'orange', 'Error': 'red', 'Pending': 'grey', "Processing":"blue"}
                     return [f'color: {colors.get(row.Status, "black")}'] * len(row)
                 st.dataframe(df_status_display.style.apply(style_status, axis=1), height=300, use_container_width=True)
-            else: st.caption("No status data generated.")
-        else: st.caption("Status will appear here after processing.")
+            else: st.caption("No status data generated for this run.")
+        else: st.caption("Status data will appear here after processing.")
     
     with col_logs, st.expander("📜 Detailed Log", expanded=True):
         log_text = "\n".join(st.session_state.logs)
-        st.text_area("Log Output:", value=log_text, height=300, key="log_output_area_key_v3", disabled=True)
+        st.text_area("Log Output:", value=log_text, height=300, key="log_output_area_final_v2", disabled=True)
 
     st.markdown("---")
     st.subheader("3. Analysis Results")
 
-    results_available = False
-    if not st.session_state.df_summary.empty:
+    results_tables_available = False
+    # Ensure DataFrames exist and are actual DataFrames before checking emptiness
+    if isinstance(st.session_state.df_summary, pd.DataFrame) and not st.session_state.df_summary.empty:
         with st.expander("📋 Summary Report", expanded=True): st.dataframe(st.session_state.df_summary, use_container_width=True)
-        results_available = True
+        results_tables_available = True
     
-    if not st.session_state.df_detailed.empty:
+    if isinstance(st.session_state.df_detailed, pd.DataFrame) and not st.session_state.df_detailed.empty:
         with st.expander("📑 Detailed Term Counts", expanded=False): st.dataframe(st.session_state.df_detailed, use_container_width=True)
-        results_available = True
+        results_tables_available = True
     
-    if not st.session_state.df_skipped.empty:
+    if isinstance(st.session_state.df_skipped, pd.DataFrame) and not st.session_state.df_skipped.empty:
         with st.expander("🚫 Skipped/Errored Files", expanded=False): st.dataframe(st.session_state.df_skipped.sort_values(by='Filename').reset_index(drop=True), use_container_width=True)
-        results_available = True
+        results_tables_available = True
     
-    if not results_available and st.session_state.initiated_once:
+    if not results_tables_available and st.session_state.initiated_once:
         st.caption("No result tables to display for this run.")
                
-    if results_available: # Only show download if there's something in the tables
+    if results_tables_available: 
         st.markdown("---"); st.subheader("4. Download Report")
         ts = int(time.time())
         out_fname = f"{config.OUTPUT_FILENAME_BASE}_{ts}.xlsx"
@@ -403,7 +422,7 @@ if st.session_state.initiated_once and not st.session_state.is_processing:
     elif st.session_state.initiated_once:
         st.info("No data was generated to include in a downloadable report.")
 
-elif not st.session_state.initiated_once:
+elif not st.session_state.initiated_once: 
     st.info("☝️ Upload files and click 'Analyze Selected Files' to begin.")
 
-st.markdown("---"); st.caption(f"Excel Analyzer v1.4")
+st.markdown("---"); st.caption(f"Excel Analyzer v1.5 (Full Code)")
