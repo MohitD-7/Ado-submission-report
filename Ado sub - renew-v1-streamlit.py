@@ -263,7 +263,7 @@ def ui_log(message):
     timestamp = time.strftime("%Y-%m-%d %H:%M:%S")
     st.session_state.logs.append(f"[{timestamp}] UI - {message}")
 
-st.markdown("<h1 style='text-align: center; color: #007bff;'>📁 Advanced Excel File Analyzer 📁</h1>", unsafe_allow_html=True)
+st.markdown("<h1 style='text-align: center; color: #007bff;'>Ado Monthly Report</h1>", unsafe_allow_html=True)
 st.markdown("---")
 
 with st.container():
